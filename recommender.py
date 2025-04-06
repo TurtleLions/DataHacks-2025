@@ -4,9 +4,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import numpy as np
 from fuzzywuzzy import process
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize, MinMaxScaler
-from sklearn.metrics.pairwise import cosine_similarity
 from scipy.sparse import hstack, csr_matrix, vstack
 import fasttext
 
@@ -150,10 +148,10 @@ def normalize_vector(vec):
 
 weights = {
     'synopsis': 0.1,
-    'genres': 0.2,
-    'tags': 0.3,
-    'score': 0.2,
-    'popularity': 0.2
+    'genres': 0.3,
+    'tags': 0.35,
+    'score': 0.1,
+    'popularity': 0.15
 }
 
 # combine features into a single vector
@@ -301,7 +299,7 @@ def main(xml_file, csv_file, top_n=10):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: python script.py <watchlist_xml_file> <anime_dataset_csv_file> [top_n]")
+        print("Usage: python recommender.py <watchlist_xml_file> <anime_dataset_csv_file> [top_n]")
     else:
         xml_file = sys.argv[1]
         csv_file = sys.argv[2]

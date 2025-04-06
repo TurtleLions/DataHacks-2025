@@ -112,7 +112,7 @@ def process_tags(df):
 
 # process description using TF-IDF
 def fit_tfidf_vectorizer(df, column_name):
-    tfidf_vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+    tfidf_vectorizer = TfidfVectorizer(stop_words='english', max_features=2000)
     tfidf_matrix = tfidf_vectorizer.fit_transform(df[column_name].fillna(""))
     tfidf_df = pd.DataFrame(tfidf_matrix.toarray(), index=df.index)
     tfidf_df = pd.DataFrame(normalize(tfidf_df), index=tfidf_df.index, columns=tfidf_df.columns)
@@ -132,11 +132,11 @@ def normalize_vector(vec):
     return vec / n if n > 0 else vec
 
 weights = {
-    'synopsis': 0.4,
+    'synopsis': 0.15,
     'genres': 0.2,
-    'tags': 0.2,
-    'score': 0.1,
-    'popularity': 0.3
+    'tags': 0.3,
+    'score': 0.15,
+    'popularity': 0.2
 }
 
 # combine features into a single vector

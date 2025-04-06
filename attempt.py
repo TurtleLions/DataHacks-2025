@@ -11,20 +11,26 @@ from scipy.sparse import hstack, csr_matrix, vstack
 
 # watchlist from xml
 def parse_watchlist(xml_file):
-    tree = ET.parse(xml_file)
-    root = tree.getroot()
-    watchlist = []
-    for anime in root.findall('anime'):
-        watched_elem = anime.find('my_watched_episodes')
+  tree = ET.parse(xml_file)
+  root = tree.getroot()
+  watchlist = []
+  for anime in root.findall('anime'):
+    watched_elem = anime.find('my_watched_episodes')
+    try:
+      watched_count = int(watched_elem.text.strip()) if watched_elem is not None and watched_elem.text else 0
+    except ValueError:
+      watched_count = 0
+    if watched_count > 0:
+      title_elem = anime.find('series_title')
+      score_elem = anime.find('my_score')
+      if title_elem is not None and title_elem.text:
         try:
-            watched_count = int(watched_elem.text.strip()) if watched_elem is not None and watched_elem.text else 0
+          user_score = float(score_elem.text.strip()) if score_elem is not None and score_elem.text else 0
         except ValueError:
-            watched_count = 0
-        if watched_count > 0:
-            title_elem = anime.find('series_title')
-            if title_elem is not None and title_elem.text:
-                watchlist.append(title_elem.text.strip())
-    return watchlist
+          user_score = 0
+        watchlist.append((title_elem.text.strip(), user_score))
+  return watchlist
+
 
 # load dataset from csv
 def load_anime_dataset(csv_file):
@@ -42,24 +48,25 @@ def load_anime_dataset(csv_file):
 
 # fuzzy matching titles to any of the three title columns
 def match_watchlist_titles(watchlist, df, threshold=70):
-    matched_indices = {}
-    for title in watchlist:
-        best_score = -1
-        best_idx = None
-        for idx, row in df.iterrows():
-            candidate_titles = [str(row['title_romaji']), str(row['title_english']), str(row['title_native'])]
-            for candidate in candidate_titles:
-                if candidate.strip() == '':
-                    continue
-                _, score = process.extractOne(title, [candidate])
-                if score > best_score:
-                    best_score = score
-                    best_idx = idx
-        if best_score < threshold:
-            print(f"Warning: No good match found for title '{title}'.")
-        else:
-            matched_indices[title] = best_idx
-    return matched_indices
+  matched_indices = {}
+  for title, user_score in watchlist:
+    best_score = -1
+    best_idx = None
+    for idx, row in df.iterrows():
+      candidate_titles = [str(row['title_romaji']), str(row['title_english']), str(row['title_native'])]
+      for candidate in candidate_titles:
+        if candidate.strip() == '':
+          continue
+        _, score = process.extractOne(title, [candidate])
+        if score > best_score:
+          best_score = score
+          best_idx = idx
+    if best_score < threshold:
+      print(f"Warning: No good match found for title '{title}'.")
+    else:
+      matched_indices[title] = (best_idx, user_score)
+  return matched_indices
+
 
 # process genres
 def process_genres(df):
@@ -112,7 +119,7 @@ def process_tags(df):
 
 # process description using TF-IDF
 def fit_tfidf_vectorizer(df, column_name):
-    tfidf_vectorizer = TfidfVectorizer(stop_words='english', max_features=2000)
+    tfidf_vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
     tfidf_matrix = tfidf_vectorizer.fit_transform(df[column_name].fillna(""))
     tfidf_df = pd.DataFrame(tfidf_matrix.toarray(), index=df.index)
     tfidf_df = pd.DataFrame(normalize(tfidf_df), index=tfidf_df.index, columns=tfidf_df.columns)
@@ -132,10 +139,10 @@ def normalize_vector(vec):
     return vec / n if n > 0 else vec
 
 weights = {
-    'synopsis': 0.15,
+    'synopsis': 0.1,
     'genres': 0.2,
     'tags': 0.3,
-    'score': 0.15,
+    'score': 0.2,
     'popularity': 0.2
 }
 
@@ -201,9 +208,11 @@ combined_vectors = np.vstack(combined_vectors)
 # build user profile
 def build_user_profile(combined_vectors, matched_indices):
   user_vectors = []
-  for title, idx in matched_indices.items():
+  for title, (idx, user_score) in matched_indices.items():
     vec = combined_vectors[idx]
-    sparse_vec = csr_matrix(vec)
+    weight = user_score / 10.0
+    weighted_vec = vec * weight
+    sparse_vec = csr_matrix(weighted_vec)
     user_vectors.append(sparse_vec)
 
   if user_vectors:

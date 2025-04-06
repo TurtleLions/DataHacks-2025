@@ -8,6 +8,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize, MinMaxScaler
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.sparse import hstack, csr_matrix, vstack
+import fasttext
+
+ft_model = fasttext.load_model('./cc.en.300.bin')
+
 
 # watchlist from xml
 def parse_watchlist(xml_file):
@@ -117,13 +121,19 @@ def process_tags(df):
     tags_encoded = np.array(tags_vectors)
     return tags_encoded, all_tags
 
-# process description using TF-IDF
-def fit_tfidf_vectorizer(df, column_name):
-    tfidf_vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
-    tfidf_matrix = tfidf_vectorizer.fit_transform(df[column_name].fillna(""))
-    tfidf_df = pd.DataFrame(tfidf_matrix.toarray(), index=df.index)
-    tfidf_df = pd.DataFrame(normalize(tfidf_df), index=tfidf_df.index, columns=tfidf_df.columns)
-    return tfidf_df
+# convert description to vector using FastText
+def embed_description_fasttext(description_series):
+  def sentence_vector(text):
+    words = text.lower().split()
+    vectors = [ft_model.get_word_vector(word) for word in words if word.isalpha()]
+    if vectors:
+      return normalize_vector(np.mean(vectors, axis=0))
+    else:
+      return np.zeros(ft_model.get_dimension())
+    
+  vectors = np.vstack([sentence_vector(desc) for desc in description_series])
+  return vectors
+
 
 # process numeric features like score and popularity
 def process_numeric_feature(df, column_name):
@@ -147,40 +157,45 @@ weights = {
 }
 
 # combine features into a single vector
-def combine_features(row, weights, penalty=0.5):
-    syn_vec = description_tfidf_df.loc[row.name].values
-    syn = normalize_vector(syn_vec)
-    if np.linalg.norm(syn_vec) == 0:
-        syn = syn * penalty
+def combine_features(row, weights, description_vector, penalty=0.5):
+  syn_vec = description_vector
+  syn = normalize_vector(syn_vec)
+  if np.linalg.norm(syn_vec) == 0:
+    syn = syn * penalty
 
-    genres_vec = np.array(row['genre_vector'], dtype=np.float32)
-    genres = normalize_vector(genres_vec)
-    if np.linalg.norm(genres_vec) == 0:
-        genres = genres * penalty
+  genres_vec = np.array(row['genre_vector'], dtype=np.float32)
+  genres = normalize_vector(genres_vec)
+  if np.linalg.norm(genres_vec) == 0:
+    genres = genres * penalty
 
-    tags_vec = np.array(row['tags_vector'], dtype=np.float32)
-    tags = normalize_vector(tags_vec)
-    if np.linalg.norm(tags_vec) == 0:
-        tags = tags * penalty
+  tags_vec = np.array(row['tags_vector'], dtype=np.float32)
+  tags = normalize_vector(tags_vec)
+  if np.linalg.norm(tags_vec) == 0:
+    tags = tags * penalty
 
-    score = np.array([row['averageScore_scaled']], dtype=np.float32)
-    popularity = np.array([row['popularity_scaled']], dtype=np.float32)
+  score = np.array([row['averageScore_scaled']], dtype=np.float32)
+  popularity = np.array([row['popularity_scaled']], dtype=np.float32)
 
-    combined = np.concatenate([
-        weights['synopsis'] * syn,
-        weights['genres'] * genres,
-        weights['tags'] * tags,
-        weights['score'] * score,
-        weights['popularity'] * popularity
-    ])
-    return combined
+  combined = np.concatenate([
+    weights['synopsis'] * syn,
+    weights['genres'] * genres,
+    weights['tags'] * tags,
+    weights['score'] * score,
+    weights['popularity'] * popularity
+  ])
+  return combined
+
+
 
 # anime data processing
 anime_csv_path = './ds/anime_data.csv'
 anime_df = pd.read_csv(anime_csv_path)
+anime_df['description'] = anime_df['description'].fillna('')
+description_vectors = embed_description_fasttext(anime_df['description'])
 anime_df['id'] = anime_df['id'].astype(str)
 
-description_tfidf_df = fit_tfidf_vectorizer(anime_df, 'description')
+description_embed_df = pd.DataFrame(embed_description_fasttext(anime_df['description']), index=anime_df.index)
+
 
 genres_encoded, mlb = process_genres(anime_df)
 anime_df['genre_vector'] = list(genres_encoded)
@@ -195,11 +210,10 @@ anime_df['popularity_scaled'] = popularity_scaled
 
 combined_vectors = []
 for idx, row in anime_df.iterrows():
-    combined_vectors.append(combine_features(row, weights))
-if not combined_vectors:
-    print("No combined vectors were generated. Check your feature processing steps.")
-    sys.exit(1)
+  desc_vec = description_vectors[idx]
+  combined_vectors.append(combine_features(row, weights, desc_vec))
 combined_vectors = np.vstack(combined_vectors)
+
 
 # combined_vectors = [csr_matrix(combine_features(row, weights)) for idx, row in anime_df.iterrows()]
 # combined_vectors = vstack(combined_vectors)
@@ -236,9 +250,10 @@ def recommend_anime(user_profile, combined_vectors, df, watched_indices, top_n=1
     recommendations = sorted(recommendations, key=lambda x: x[1], reverse=True)[:top_n]
     results = []
     for idx, sim in recommendations:
-        title = df.loc[idx, 'title_romaji'] or df.loc[idx, 'title_english'] or df.loc[idx, 'title_native']
+        title = df.loc[idx, 'title_english'] or df.loc[idx, 'title_romaji'] or df.loc[idx, 'title_native']
         results.append({'title': title, 'similarity': sim})
     return results
+
 
 def main(xml_file, csv_file, top_n=10):
     watchlist = parse_watchlist(xml_file)
@@ -247,7 +262,7 @@ def main(xml_file, csv_file, top_n=10):
     df = load_anime_dataset(csv_file)
     
     matched_indices = match_watchlist_titles(watchlist, df)
-    watched_indices = list(matched_indices.values())
+    watched_indices = [idx for idx, _ in matched_indices.values()]
     
     genres_encoded, _ = process_genres(df)
     df['genre_vector'] = list(genres_encoded)
@@ -260,18 +275,17 @@ def main(xml_file, csv_file, top_n=10):
     df['averageScore_scaled'] = score_scaled
     df['popularity_scaled'] = popularity_scaled
     
-    global description_tfidf_df
-    description_tfidf_df = fit_tfidf_vectorizer(df, 'description')
+    global description_vectors
+    description_vectors = embed_description_fasttext(anime_df['description'])
+
+
     
     combined_vectors = []
-    for idx, row in df.iterrows():
-        if 'genre_vector' not in row or 'tags_vector' not in row:
-            continue
-        combined_vectors.append(combine_features(row, weights))
-    if not combined_vectors:
-        print("No combined vectors were generated. Check your feature processing steps.")
-        sys.exit(1)
+    for idx, row in anime_df.iterrows():
+        desc_vec = description_vectors[idx]  # Get the corresponding description vector
+        combined_vectors.append(combine_features(row, weights, desc_vec))  # Pass it into combine_features
     combined_vectors = np.vstack(combined_vectors)
+
     
     user_profile = build_user_profile(combined_vectors, matched_indices)
     if user_profile is None:
